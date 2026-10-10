@@ -5,6 +5,8 @@
 界面、路由、业务规则、安全语义与中文文案全部保留。
 
 - 技术栈：TypeScript 5.7（strict）· Hono 4 · Cloudflare Workers · D1 · R2 · Workers Assets · Cron Triggers
+- **要求 wrangler 4**（`devDependencies` 里是 `^4`）。wrangler 3.x 的配置校验强制要求 D1 绑定带
+  `database_id`，用不了下面的自动供给；wrangler 4 起该字段可选，部署时按名字自动创建并绑定。
 - 页面：21 个服务端渲染页面（仪表盘 / 商品 / 分类 / 供应商 / 出入库 / 盘点 / 流水 / 预警 / 报表 / 用户 / 个人中心 / 系统更新 / 数据维护）
 - 无需构建步骤：`wrangler` 直接打包 `src/index.ts`（esbuild），静态资源由 Workers Assets 下发
 
@@ -29,33 +31,93 @@ npm run dev
 
 ## 2. 部署到 Cloudflare
 
+### 2.1 先搞清 D1 的两种绑定写法
+
+`wrangler.jsonc` 里的 D1 绑定有两种合法写法，**但绝对不能写占位字符串**：
+
+| 写法 | 配置 | 行为 |
+| --- | --- | --- |
+| **自动供给**（默认，推荐） | 只写 `binding` + `database_name`，**不写 `database_id`** | 部署时先按名字查找，找不到就自动创建并绑定 |
+| 手动指定 | 额外写 `"database_id": "<UUID>"` | 直接用这个 ID，不做任何创建 |
+
+> ⚠️ **不要写 `"database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID"` 这类占位符。**
+> wrangler 只看「字段有没有值」，有值就认为「已完全指定」，于是把占位符当真实 ID 发给 API，
+> 报 `binding DB of type d1 must have a valid database_id specified [code: 10021]`。
+> 要么留空（走自动供给），要么填真实 UUID。
+
+R2 同理：`bucket_name` 指向的桶不存在时会自动创建；想手动建就先跑
+`npx wrangler r2 bucket create inventory-backups`。
+
+**首次使用 R2 的账号要先在 Dashboard 的 R2 页面点一次开通条款**，否则自动创建会失败 ——
+这是最常见的部署失败原因之一。
+
+### 2.2 方式一：Git 连接 Workers Builds（推荐）
+
+把仓库推到 GitHub 后，在 Cloudflare Dashboard 建一个 Worker 并连接该仓库，构建设置填：
+
+| 配置项 | 值 |
+| --- | --- |
+| Build command | `npm install` |
+| Deploy command | `npm run deploy:ci` |
+
+`deploy:ci` 的内容是「部署 + 跑线上迁移」：
+
+```jsonc
+"deploy:ci": "wrangler deploy && wrangler d1 migrations apply inventory --remote"
+```
+
+**顺序不能颠倒**：首次部署时 D1 是 `wrangler deploy` 阶段才被创建出来的，
+迁移必须排在它后面，否则会报「找不到数据库」。
+
+> ⚠️ **`name` 必须与 Workers Builds 的项目名完全一致。**
+> wrangler 只认配置里写的名字，Cloudflare 不会用项目名覆盖它。
+> 两者不一致时会**再建一个 Worker** —— 你打开的是新 Worker 的空库，数据却还在原来那个里，
+> 症状是「部署成功了，但数据全没了」。
+>
+> 另外注意：通过 Dashboard 部署时，自动创建出来的 D1 / R2 **ID 不会写回仓库**。
+> 之后若想改用本地 `wrangler deploy`，要先去 Dashboard 把 ID 复制进配置，
+> 否则 wrangler 会当成「没有 ID」再创建一套新资源。
+
+### 2.3 方式二：本地命令行部署
+
 ```bash
 # 1) 登录
 npx wrangler login
 
-# 2) 创建 D1 数据库，把输出的 database_id 填进 wrangler.jsonc
+# 2) 建 D1（想走自动供给可跳过这步）
 npx wrangler d1 create inventory
 
-# 3) 创建 R2 备份桶（「数据维护」页要用；不需要备份功能可跳过并注释掉
-#    wrangler.jsonc 里的 r2_buckets 段）
+# 3) 建 R2 备份桶（不需要备份功能可跳过，并把 wrangler.jsonc 的 r2_buckets 段注释掉）
 npx wrangler r2 bucket create inventory-backups
 
-# 4) 执行线上迁移
+# 4) 部署（会顺带创建 D1 / R2）
+npm run deploy
+
+# 5) 执行线上迁移 —— 必须在部署之后，否则数据库还不存在
 npm run db:migrate:remote
 
-# 5) 写入必须的密钥
+# 6) 写入必须的密钥
 npx wrangler secret put INVENTORY_SESSION_SECRET   # openssl rand -hex 32
 npx wrangler secret put INVENTORY_ADMIN_PASSWORD   # 强密码
 
-# 6) 检查 wrangler.jsonc 里的 INVENTORY_BASE_URL 已改成你的实际地址
-
-# 7) 部署
-npm run deploy
+# 7) 检查 wrangler.jsonc 里的 INVENTORY_BASE_URL 已改成你的实际地址
 ```
 
 部署后访问 `/healthz` 应返回 `{"status":"ok","version":"..."}`。
 
 > **登录后第一件事：改掉默认管理员密码。** 默认账号 `admin` / `Admin@12345`。
+
+### 2.4 部署排错
+
+| 报错 | 原因与处理 |
+| --- | --- |
+| `binding DB of type d1 must have a valid database_id specified [code: 10021]` | 配置里 `database_id` 是占位字符串。删掉该字段（走自动供给）或填真实 UUID |
+| `DB bindings must have a "database_id" field` | 只在 `--dry-run` 下出现，属**正常现象**：dry-run 不联网、无法创建资源，所以回填不了 ID。真实部署（`wrangler deploy`）不受影响 |
+| `d1_databases[0] bindings must have a "database_id" field but got {...}` | wrangler 3.x 的配置校验要求该字段存在。升级到 `wrangler@4`，或在 deploy 命令后加 `--experimental-provision` |
+| 部署成功但页面报 500 / 「表不存在」 | 迁移没跑。执行 `npm run db:migrate:remote`，或把 Deploy command 改成 `npm run deploy:ci` |
+| 部署成功但数据「消失」了 | `name` 与 Dashboard 项目名不一致，实际部署到了另一个 Worker |
+| 迁移或供给报权限错误 | 构建用的 API Token 缺 D1 权限。Dashboard → 该 Worker → Settings → Build → API token，给它加上 D1 的编辑权限；或改为在本地手动执行迁移 |
+| R2 自动创建失败 | 账号还没开通 R2。先去 Dashboard 的 R2 页面点一次开通 |
 
 ---
 
@@ -271,10 +333,11 @@ docs/CONVENTIONS.md   移植规范（视图层规则、命名约定、交付要�
 
 ```bash
 npm run dev              # 本地开发（wrangler dev）
-npm run deploy           # 部署到 Cloudflare
+npm run deploy           # 部署到 Cloudflare（自动创建缺失的 D1 / R2）
+npm run deploy:ci        # 部署 + 跑线上迁移（Workers Builds 的 Deploy command 用这个）
 npm run typecheck        # tsc --noEmit
 npm run db:migrate:local # 本地执行迁移
-npm run db:migrate:remote# 线上执行迁移
+npm run db:migrate:remote# 线上执行迁移（必须在 deploy 之后）
 npm run tail             # 实时查看线上日志
 ```
 
