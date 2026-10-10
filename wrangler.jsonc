@@ -1,0 +1,79 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "inventory",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-01-01",
+  // bcryptjs（用于校验从原 Go 版迁移过来的 bcrypt 历史密码摘要）需要 node:crypto
+  "compatibility_flags": ["nodejs_compat"],
+
+  // ── 静态资源 ────────────────────────────────────────────────────────────
+  // public/static/** 由 Workers 静态资源直接下发，命中文件时不会进入 Worker。
+  // 缓存策略写在 public/_headers 里（URL 带内容指纹，可长期缓存）。
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS"
+  },
+
+  // ── D1 数据库 ───────────────────────────────────────────────────────────
+  // 先执行 `npm run db:create`，把返回的 database_id 填到下面。
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "inventory",
+      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // ── R2 备份桶 ───────────────────────────────────────────────────────────
+  // 「数据维护」页的备份 / 恢复 / 轮转依赖这个桶。
+  // 部署前先执行： npx wrangler r2 bucket create inventory-backups
+  // 完全不需要备份功能时，把下面整段注释掉即可 —— 页面会降级成
+  // 「未绑定 R2 备份桶」的提示，其余功能不受影响。
+  "r2_buckets": [
+    { "binding": "BACKUPS", "bucket_name": "inventory-backups" }
+  ],
+
+  // ── 定时任务 ────────────────────────────────────────────────────────────
+  // 每小时清理过期会话、登录记录与找回密码记录（对应原版的 runCleanupLoop）。
+  "triggers": {
+    "crons": ["0 * * * *"]
+  },
+
+  // ── 运行期变量 ──────────────────────────────────────────────────────────
+  // 敏感项（INVENTORY_SESSION_SECRET / INVENTORY_ADMIN_PASSWORD）不要写在这里，
+  // 用 `wrangler secret put` 写入。
+  "vars": {
+    "INVENTORY_APP_NAME": "库存管理系统",
+    // 当前版本号。系统更新页用它和 GitHub Release 的 tag 比较，
+    // 因此每次发布请把它改成与 tag 一致的语义化版本（如 1.2.0）。
+    "INVENTORY_VERSION": "1.0.0",
+    "INVENTORY_ENV": "production",
+    // ⚠️ 部署后请改成 Worker 的实际地址（例如
+    //    https://inventory.<你的子域>.workers.dev 或自定义域名）。
+    //    它决定 Secure cookie 与 HSTS 是否启用 —— 填 http:// 就等于关掉它们。
+    "INVENTORY_BASE_URL": "https://inventory.example.com",
+    "INVENTORY_LOG_LEVEL": "info",
+    "INVENTORY_ALLOW_REGISTRATION": "true",
+    "INVENTORY_DEFAULT_ROLE": "viewer",
+    "INVENTORY_ADMIN_USERNAME": "admin",
+    "INVENTORY_ADMIN_EMAIL": "admin@example.com",
+    "INVENTORY_SEED_DEMO_DATA": "false",
+    "INVENTORY_MAX_LOGIN_ATTEMPTS": "5",
+    "INVENTORY_LOCKOUT_WINDOW": "15m",
+    "INVENTORY_SESSION_LIFETIME": "12h",
+    "INVENTORY_REMEMBER_LIFETIME": "720h",
+    "INVENTORY_UPDATE_ENABLED": "true",
+    // 与原版一致：留空表示「在线更新未启用」。填成 owner/repo
+    // （即托管这个 Workers 版的仓库）之后，系统更新页才会去查 Releases。
+    "INVENTORY_UPDATE_REPO": "",
+    "INVENTORY_BACKUP_KEEP": "14",
+    "INVENTORY_BACKUP_PREFIX": "backups/"
+    // INVENTORY_UPDATE_DEPLOY_HOOK 含密钥，用 `wrangler secret put` 写入。
+    // INVENTORY_UPDATE_TOKEN 同上（访问私有仓库或提高 GitHub API 配额）。
+  },
+
+  "observability": {
+    "enabled": true
+  }
+}

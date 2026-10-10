@@ -1,0 +1,27 @@
+{
+  "name": "inventory-workers",
+  "version": "1.0.0",
+  "private": true,
+  "description": "库存管理系统 · Cloudflare Workers 版（Hono + D1）",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "cf-typegen": "wrangler types",
+    "db:migrate:local": "wrangler d1 migrations apply inventory --local",
+    "db:migrate:remote": "wrangler d1 migrations apply inventory --remote",
+    "db:create": "wrangler d1 create inventory",
+    "tail": "wrangler tail"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "hono": "^4.6.14"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241218.0",
+    "@types/bcryptjs": "^2.4.6",
+    "typescript": "^5.7.2",
+    "wrangler": "^3.99.0"
+  }
+}

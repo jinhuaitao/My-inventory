@@ -1,0 +1,43 @@
+// 首次运行初始化 —— 对应原 Go 版 main.go 启动时调用的 database.Seed。
+//
+// Workers 没有「进程启动」这个时机（实例随时创建、随时回收），因此改成
+// **首次请求时惰性初始化**，并用模块级 Promise 保证同一个 isolate 内只跑一次。
+//
+// 与原版一致的语义：
+//   * 只有在 users 表为空时才创建默认管理员；
+//   * 只有在 products 表为空、且开启了 INVENTORY_SEED_DEMO_DATA 时才写演示数据；
+//   * 两个判断都由数据库侧的守卫保证并发安全（见 db/seed.ts）。
+
+import type { Store } from "./db";
+import type { Config } from "./env";
+import type { Logger } from "./lib/logger";
+
+let seedPromise: Promise<void> | null = null;
+
+/** 保证数据库已完成初始化；同一 isolate 内只真正执行一次。 */
+export function ensureSeeded(store: Store, cfg: Config, logger: Logger): Promise<void> {
+  if (!seedPromise) {
+    seedPromise = runSeed(store, cfg, logger).catch((err) => {
+      // 失败后允许下一次请求重试：数据库瞬时不可用不应该让这个实例
+      // 永久停留在「未初始化」状态（否则管理员账号永远建不出来）。
+      seedPromise = null;
+      throw err;
+    });
+  }
+  return seedPromise;
+}
+
+async function runSeed(store: Store, cfg: Config, logger: Logger): Promise<void> {
+  await store.seed({
+    adminUsername: cfg.seedAdminUsername,
+    adminEmail: cfg.seedAdminEmail,
+    adminPassword: cfg.seedAdminPassword,
+    withDemoData: cfg.seedDemoData,
+  });
+
+  if (cfg.seedDemoData) {
+    await store.seedDemoData();
+  }
+
+  logger.debug("数据库初始化检查完成");
+}

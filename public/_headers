@@ -1,0 +1,4 @@
+# 静态资源按内容指纹（?v=<hash>）下发，内容一变 URL 就变，
+# 因此可以放心长期缓存。改动这里前请先确认 URL 仍然带指纹。
+/static/*
+  Cache-Control: public, max-age=31536000, immutable
