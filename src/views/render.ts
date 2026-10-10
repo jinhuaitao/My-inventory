@@ -3,7 +3,6 @@
 import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { AppEnv } from "../context";
-import { updateConfigured } from "../env";
 import { getFlash, type Flash } from "../lib/flash";
 import { localYear } from "../lib/time";
 import type { User } from "../types";
@@ -28,7 +27,6 @@ export interface PageData<T = unknown> {
   query: URLSearchParams;
   env: string;
   allowRegistration: boolean;
-  updateEnabled: boolean;
   version: string;
   year: number;
   /** 静态资源内容指纹。 */
@@ -85,7 +83,6 @@ async function buildPageData<T>(
     query: url.searchParams,
     env: cfg.env,
     allowRegistration: await registrationEnabled(c),
-    updateEnabled: updateConfigured(cfg),
     version: cfg.version,
     year: localYear(),
     assetVersion: await assetVersion(c.env, cfg.version),

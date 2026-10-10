@@ -20,7 +20,11 @@ export interface Env {
   INVENTORY_LOG_LEVEL?: string;
   INVENTORY_BASE_URL?: string;
 
-  INVENTORY_SESSION_SECRET?: string;
+  // 说明：原版有 INVENTORY_SESSION_SECRET，但**两版代码都从未真正使用它** ——
+  // 项目里没有任何 HMAC / 签名逻辑（会话令牌本身就是随机串，库里只存 SHA-256
+  // 摘要；CSRF 令牌也是服务端比对），所以这个密钥既不参与校验也不参与派生。
+  // 它唯一的作用是给生产部署加一道「必须先设密钥」的卡点，因此这里不再读取。
+
   INVENTORY_SESSION_LIFETIME?: string;
   INVENTORY_REMEMBER_LIFETIME?: string;
   INVENTORY_MAX_LOGIN_ATTEMPTS?: string;
@@ -33,11 +37,6 @@ export interface Env {
   INVENTORY_ADMIN_PASSWORD?: string;
   INVENTORY_SEED_DEMO_DATA?: string;
 
-  INVENTORY_UPDATE_ENABLED?: string;
-  INVENTORY_UPDATE_REPO?: string;
-  INVENTORY_UPDATE_INTERVAL?: string;
-  INVENTORY_UPDATE_TOKEN?: string;
-
   INVENTORY_BACKUP_KEEP?: string;
   /**
    * R2 对象键前缀（Workers 版新增）。
@@ -46,15 +45,6 @@ export interface Env {
    * 但用键前缀能起到同样的隔离作用：同一个桶可以放多个环境 / 多个应用的备份。
    */
   INVENTORY_BACKUP_PREFIX?: string;
-  /**
-   * 部署钩子地址（Workers 版新增）。
-   *
-   * 原版「立即更新」会下载安装包、替换可执行文件再重启进程；Workers 上
-   * Worker 不能替换自己的代码，等效做法是触发一次重新部署 ——
-   * 填上 Cloudflare Workers Builds 的 Deploy Hook（或任意能触发部署的
-   * Webhook）后，「立即更新」就能真正跑起来。留空则该按钮只给出部署指引。
-   */
-  INVENTORY_UPDATE_DEPLOY_HOOK?: string;
 }
 
 /** 配置错误。与原版一样，非法配置直接让服务不可用，而不是静默回落。 */
@@ -72,16 +62,8 @@ export interface Config {
   baseUrl: string;
   logLevel: string;
 
-  sessionSecret: string;
   sessionLifetimeMs: number;
   rememberLifetimeMs: number;
-
-  updateEnabled: boolean;
-  updateRepo: string;
-  updateIntervalMs: number;
-  updateToken: string;
-  /** 部署钩子地址；为空表示「立即更新」只能给出人工指引。 */
-  updateDeployHook: string;
 
   seedAdminUsername: string;
   seedAdminEmail: string;
@@ -209,7 +191,6 @@ export function loadConfig(env: Env): Config {
   const sessionLifetimeMs = duration(env, "INVENTORY_SESSION_LIFETIME", 12 * 3600_000);
   const rememberLifetimeMs = duration(env, "INVENTORY_REMEMBER_LIFETIME", 720 * 3600_000);
   const lockoutWindowMs = duration(env, "INVENTORY_LOCKOUT_WINDOW", 15 * 60_000);
-  const updateIntervalMs = duration(env, "INVENTORY_UPDATE_INTERVAL", 6 * 3600_000);
 
   const defaultRoleRaw = str(env, "INVENTORY_DEFAULT_ROLE", "viewer").trim().toLowerCase();
   if (defaultRoleRaw === "admin") {
@@ -240,9 +221,6 @@ export function loadConfig(env: Env): Config {
       `INVENTORY_REMEMBER_LIFETIME（${rememberLifetimeMs}ms）不应短于 INVENTORY_SESSION_LIFETIME（${sessionLifetimeMs}ms）`,
     );
   }
-  if (updateIntervalMs <= 0) {
-    throw new ConfigError("INVENTORY_UPDATE_INTERVAL 必须为正时长");
-  }
 
   const backupKeep = int(env, "INVENTORY_BACKUP_KEEP", DEFAULT_BACKUP_KEEP);
   if (backupKeep < 0) {
@@ -253,20 +231,6 @@ export function loadConfig(env: Env): Config {
   // 与原版一致：默认 http://localhost:8080。真正部署时必须改成 Worker 的
   // 对外地址，否则 isHttps 为假，Secure cookie 与 HSTS 都不会启用。
   const baseUrl = str(env, "INVENTORY_BASE_URL", "http://localhost:8080").replace(/\/+$/, "");
-
-  let sessionSecret = str(env, "INVENTORY_SESSION_SECRET", "");
-  if (sessionSecret === "") {
-    if (envName.toLowerCase() === "production") {
-      throw new ConfigError(
-        "生产环境必须设置 INVENTORY_SESSION_SECRET（至少 32 个字符的随机字符串）。" +
-          "可用 `wrangler secret put INVENTORY_SESSION_SECRET` 写入。",
-      );
-    }
-    sessionSecret = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
-  }
-  if (sessionSecret.length < 16) {
-    throw new ConfigError("INVENTORY_SESSION_SECRET 太短，请使用至少 16 个字符的随机字符串");
-  }
 
   const seedAdminPassword =
     str(env, "INVENTORY_ADMIN_PASSWORD", "") || DEFAULT_ADMIN_PASSWORD;
@@ -283,15 +247,8 @@ export function loadConfig(env: Env): Config {
     baseUrl,
     logLevel: str(env, "INVENTORY_LOG_LEVEL", "info"),
 
-    sessionSecret,
     sessionLifetimeMs,
     rememberLifetimeMs,
-
-    updateEnabled: bool(env, "INVENTORY_UPDATE_ENABLED", true),
-    updateRepo: str(env, "INVENTORY_UPDATE_REPO", "").trim(),
-    updateIntervalMs,
-    updateToken: str(env, "INVENTORY_UPDATE_TOKEN", ""),
-    updateDeployHook: str(env, "INVENTORY_UPDATE_DEPLOY_HOOK", "").trim(),
 
     seedAdminUsername: str(env, "INVENTORY_ADMIN_USERNAME", "admin"),
     seedAdminEmail: str(env, "INVENTORY_ADMIN_EMAIL", "admin@example.com"),
@@ -319,9 +276,4 @@ function normalizeKeyPrefix(raw: string): string {
   const trimmed = raw.trim().replace(/^\/+/, "");
   if (trimmed === "") return "";
   return trimmed.endsWith("/") ? trimmed : `${trimmed}/`;
-}
-
-/** 在线更新功能是否可用（仓库已配置）。 */
-export function updateConfigured(cfg: Config): boolean {
-  return cfg.updateEnabled && cfg.updateRepo.includes("/");
 }

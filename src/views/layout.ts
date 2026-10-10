@@ -5,7 +5,7 @@
 
 import { html, type Html } from "./html";
 import { flash, sidebar } from "./partials";
-import { roleCanManageUsers, roleLabel, userDisplayName, userInitials } from "../types";
+import { roleLabel, userDisplayName, userInitials } from "../types";
 import type { PageData } from "./render";
 
 export function layout(pd: PageData, content: Html, scripts: Html | null): Html {
@@ -71,7 +71,6 @@ function appShell(pd: PageData, content: Html): Html {
               <a href="/profile/password" class="dropdown-item">修改密码</a>
               <a href="/profile/security" class="dropdown-item">安全问题</a>
               <a href="/profile/sessions" class="dropdown-item">登录设备</a>
-              ${roleCanManageUsers(user.role) ? html`<a href="/admin/update" class="dropdown-item">系统更新</a>` : ""}
               <form method="post" action="/logout" class="dropdown-form">
                 <input type="hidden" name="_csrf" value="${pd.csrf}">
                 <button type="submit" class="dropdown-item danger">退出登录</button>

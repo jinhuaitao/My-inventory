@@ -295,8 +295,8 @@ export const maintenanceView: View<MaintenanceData> = {
         <li><b>自动备份由定时任务完成。</b>需要的话在 <code>wrangler.jsonc</code> 里加一条
             Cron Trigger，再调用 <code>/admin/maintenance/backup</code>；
             「保留份数」只影响自动命名的备份，手工命名的不会被轮转删除。</li>
-        <li><b>换环境时别忘了会话密钥。</b><code>INVENTORY_SESSION_SECRET</code> 不在数据库里，
-            不一致会导致所有人重新登录。</li>
+        <li><b>换环境不用管会话。</b>会话记录就存在 <code>sessions</code> 表里，cookie 里只有
+            随机令牌、不依赖任何本地密钥文件 —— 把库整体迁过去，登录状态会一并带过去。</li>
         <li><b>D1 自带时间点恢复。</b>误删数据时，
             <code>npx wrangler d1 time-travel restore inventory --timestamp=&lt;时间&gt;</code>
             往往比备份更快，可以作为最后一道防线。</li>

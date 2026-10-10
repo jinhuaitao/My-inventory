@@ -115,7 +115,6 @@ const ICONS = {
   lowStock: html`<path d="M12 3.5l9.2 16H2.8l9.2-16z"/><path d="M12 9.5v4.5"/><circle cx="12" cy="16.8" r="0.9" fill="currentColor" stroke="none"/>`,
   reports: html`<path d="M4 20V11"/><path d="M10 20V4"/><path d="M16 20v-6"/><path d="M22 20H2"/>`,
   users: html`<circle cx="12" cy="8" r="3.6"/><path d="M4.6 20a7.4 7.4 0 0114.8 0"/>`,
-  update: html`<path d="M21 12a9 9 0 11-3.2-6.9"/><path d="M21 4v5h-5"/>`,
   maintenance: html`<ellipse cx="12" cy="5.5" rx="7.5" ry="3"/><path d="M4.5 5.5v13c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-13"/><path d="M4.5 12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3"/>`,
 } as const;
 
@@ -164,7 +163,6 @@ export function sidebar(active: string, user: User, appName: string, envName: st
 
     ${canManage
       ? html`${navItem("/users", active, "users", "用户管理", ICONS.users)}
-    ${navItem("/admin/update", active, "update", "系统更新", ICONS.update)}
     ${navItem("/admin/maintenance", active, "maintenance", "数据维护", ICONS.maintenance)}`
       : ""}
   </nav>

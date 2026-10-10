@@ -30,7 +30,6 @@ import { catalogRoutes } from "./routes/catalog";
 import { stockRoutes } from "./routes/stock";
 import { reportRoutes } from "./routes/reports";
 import { userRoutes } from "./routes/users";
-import { updateRoutes } from "./routes/update";
 import { maintenanceRoutes } from "./routes/maintenance";
 
 const app = new Hono<AppEnv>();
@@ -72,18 +71,12 @@ app.get("/favicon.ico", async (c) => {
 /**
  * 存活探针：进程能响应即视为存活（刻意不碰数据库）。
  *
- * `?expect=<版本>` 是 Workers 版新增的用法，供「等待部署生效」页面轮询：
- * 部署期间旧版本仍在正常服务，只判断「能不能通」会立刻成功、页面刷新后
- * 看到的还是旧版本（原版重启流程里踩过同样的坑）。带上 expect 之后，
- * 版本没换过来就返回 503，等待页因此能一直等到真正生效。
+ * 移植时曾加过一个 `?expect=<版本>` 用法，供「等待部署生效」页面轮询版本号 ——
+ * 那个页面随「系统更新」功能一起删掉了，因此这里只保留最基本的返回。
+ * 部署是否已生效改由平台侧判断（wrangler 会等版本就绪，Workers Builds 也有构建日志）。
  */
 app.get("/healthz", (c) => {
-  const cfg = c.get("cfg");
-  const expect = c.req.query("expect") ?? "";
-  if (expect !== "" && expect !== cfg.version) {
-    return c.json({ status: "stale", version: cfg.version, expect }, 503);
-  }
-  return c.json({ status: "ok", version: cfg.version });
+  return c.json({ status: "ok", version: c.get("cfg").version });
 });
 
 /** 就绪探针：额外检查数据库连通性。 */
@@ -124,7 +117,6 @@ appRoutes.route("/", catalogRoutes);
 appRoutes.route("/", stockRoutes);
 appRoutes.route("/", reportRoutes);
 appRoutes.route("/", userRoutes);
-appRoutes.route("/", updateRoutes);
 appRoutes.route("/", maintenanceRoutes);
 
 app.route("/", appRoutes);

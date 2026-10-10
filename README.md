@@ -7,7 +7,7 @@
 - 技术栈：TypeScript 5.7（strict）· Hono 4 · Cloudflare Workers · D1 · R2 · Workers Assets · Cron Triggers
 - **要求 wrangler 4**（`devDependencies` 里是 `^4`）。wrangler 3.x 的配置校验强制要求 D1 绑定带
   `database_id`，用不了下面的自动供给；wrangler 4 起该字段可选，部署时按名字自动创建并绑定。
-- 页面：21 个服务端渲染页面（仪表盘 / 商品 / 分类 / 供应商 / 出入库 / 盘点 / 流水 / 预警 / 报表 / 用户 / 个人中心 / 系统更新 / 数据维护）
+- 页面：20 个服务端渲染页面（仪表盘 / 商品 / 分类 / 供应商 / 出入库 / 盘点 / 流水 / 预警 / 报表 / 用户 / 个人中心 / 数据维护）
 - 无需构建步骤：`wrangler` 直接打包 `src/index.ts`（esbuild），静态资源由 Workers Assets 下发
 
 ---
@@ -50,6 +50,13 @@ R2 同理：`bucket_name` 指向的桶不存在时会自动创建；想手动建
 
 **首次使用 R2 的账号要先在 Dashboard 的 R2 页面点一次开通条款**，否则自动创建会失败 ——
 这是最常见的部署失败原因之一。
+
+**表结构会在首次请求时自动创建。** 与原版一致（Go 版把 `schema.sql` 用 `//go:embed`
+嵌进二进制，启动时执行 `database.Migrate`），Worker 发现库是空的就会按
+`migrations/0001_init.sql` 建好全部 10 张表。所以**即使忘了跑迁移，站点也不会 500**。
+
+> 注意这只覆盖**空库**。以后新增的结构变更仍然要显式执行 `wrangler d1 migrations apply`
+> —— 自动建表只在 `users` 表不存在时触发，**不可能**悄悄改动一个已有数据的库。
 
 ### 2.2 方式一：Git 连接 Workers Builds（推荐）
 
@@ -96,8 +103,7 @@ npm run deploy
 # 5) 执行线上迁移 —— 必须在部署之后，否则数据库还不存在
 npm run db:migrate:remote
 
-# 6) 写入必须的密钥
-npx wrangler secret put INVENTORY_SESSION_SECRET   # openssl rand -hex 32
+# 6) 写入管理员密码（强烈建议；不写则用内置的 Admin@12345）
 npx wrangler secret put INVENTORY_ADMIN_PASSWORD   # 强密码
 
 # 7) 检查 wrangler.jsonc 里的 INVENTORY_BASE_URL 已改成你的实际地址
@@ -107,25 +113,20 @@ npx wrangler secret put INVENTORY_ADMIN_PASSWORD   # 强密码
 
 > **登录后第一件事：改掉默认管理员密码。** 默认账号 `admin` / `Admin@12345`。
 
-### 2.4 必须设置的两个密钥（漏了会启动即 500）
+### 2.4 唯一需要设置的密钥：`INVENTORY_ADMIN_PASSWORD`
 
 | 密钥 | 生产环境要求 | 漏掉的后果 |
 | --- | --- | --- |
-| `INVENTORY_SESSION_SECRET` | **必填**，≥16 字符（建议 32+） | Worker 每次请求都返回 500「服务配置错误，无法启动：生产环境必须设置 INVENTORY_SESSION_SECRET」 |
-| `INVENTORY_ADMIN_PASSWORD` | 强烈建议设置 | 能启动，但管理员密码是内置的 `Admin@12345`；生产环境会打 warn 日志 |
+| `INVENTORY_ADMIN_PASSWORD` | 强烈建议设置 | 能正常启动，但管理员密码是内置的 `Admin@12345`；生产环境会打 warn 日志 |
 
 ```bash
-# 生成一个强随机串（64 个十六进制字符）
-openssl rand -hex 32
-
 # 写入（需要先 npx wrangler login）
-npx wrangler secret put INVENTORY_SESSION_SECRET
 npx wrangler secret put INVENTORY_ADMIN_PASSWORD
 ```
 
 用 Workers Builds 部署、本机没登录 wrangler 的，可以直接在
 **Dashboard → 该 Worker → Settings → Variables and Secrets → Add**，
-类型选 **Secret**（不是 Text），名字照上表填。**设置后立即生效，不需要重新部署。**
+类型选 **Secret**（不是 Text）。**设置后立即生效，不需要重新部署。**
 
 三个容易踩的点：
 
@@ -133,21 +134,31 @@ npx wrangler secret put INVENTORY_ADMIN_PASSWORD
    只有 Secret 是加密存储的。
 2. **密钥按 Worker 隔离。** 必须设在 `name` 对应的那个 Worker 上 —— 如果名字不一致，
    你会给一个 Worker 配好密钥、却在访问另一个。
-3. **开发环境不会遇到这个错。** `INVENTORY_ENV` 不是 `production` 时，会话密钥会自动生成
-   （所以本地 `.dev.vars` 能直接跑）。只有部署到生产才会触发这道守卫 —— 这是刻意设计的
-   fail-fast：密钥缺失时签名/校验会话的能力是坏的，与其带病运行不如直接拒绝启动。
+3. **改密码要趁早。** 默认账号 `admin` / `Admin@12345` 是公开的；首次登录后立刻改掉，
+   或直接通过上面的 Secret 指定强密码。
+
+> **关于 `INVENTORY_SESSION_SECRET`（已移除）**
+> 旧版本要求生产环境必须显式设置这个会话密钥，否则拒绝启动。核对原 Go 实现后确认：
+> 它是一份**从未被读取的死配置** —— 原版 `internal/auth` 里没有任何 HMAC/签名逻辑，
+> 移植版的 `SessionManager` 也只读 `sessionLifetimeMs` / `rememberLifetimeMs`，
+> `src/lib/crypto.ts` 不导出任何签名原语。会话令牌本身是 256 位随机串（存哈希、比对用
+> 定时安全比较），安全性不依赖这个密钥。因此该变量及其生产守卫已整体删除，
+> **不会再出现「每次部署都要重新设置」的问题**。若你的 Dashboard 里还留着这条 Secret，
+> 删掉即可，不影响任何功能。
 
 ### 2.5 部署排错
 
 | 报错 | 原因与处理 |
 | --- | --- |
-| `服务配置错误，无法启动：生产环境必须设置 INVENTORY_SESSION_SECRET…` | 生产环境没设会话密钥。见 2.4，用 `wrangler secret put` 或 Dashboard 写入 |
-| `服务配置错误，无法启动：INVENTORY_SESSION_SECRET 太短…` | 密钥不足 16 字符。用 `openssl rand -hex 32` 重新生成 |
+| `服务配置错误，无法启动：INVENTORY_SESSION_SECRET…` | **旧版本**的报错。该变量已移除，请更新到最新代码后重新部署；同时可删掉 Dashboard 里的同名 Secret |
 | 日志出现「生产环境仍在使用内置的默认管理员密码」 | 没设 `INVENTORY_ADMIN_PASSWORD`，管理员是 `Admin@12345`。立刻设置并重新部署 |
 | `binding DB of type d1 must have a valid database_id specified [code: 10021]` | 配置里 `database_id` 是占位字符串。删掉该字段（走自动供给）或填真实 UUID |
 | `DB bindings must have a "database_id" field` | 只在 `--dry-run` 下出现，属**正常现象**：dry-run 不联网、无法创建资源，所以回填不了 ID。真实部署（`wrangler deploy`）不受影响 |
 | `d1_databases[0] bindings must have a "database_id" field but got {...}` | wrangler 3.x 的配置校验要求该字段存在。升级到 `wrangler@4`，或在 deploy 命令后加 `--experimental-provision` |
-| 部署成功但页面报 500 / 「表不存在」 | 迁移没跑。执行 `npm run db:migrate:remote`，或把 Deploy command 改成 `npm run deploy:ci` |
+| `数据库初始化失败，请检查 D1 绑定与迁移是否已执行` | 空库会自动建表，所以出现这句说明**建表本身失败了**（D1 不可用、权限不足等）。去 `wrangler tail` 看同一条日志里的「错误」字段 |
+| `数据库尚未初始化：D1 里没有任何表…` | 建表没跑成（多见于旧版本）。执行 `npm run db:migrate:remote` |
+| 部署成功但页面报 500 / 「表不存在」 | 同第一条。另外把 Deploy command 改成 `npm run deploy:ci`，让每次部署都带上迁移 |
+| `服务配置错误，无法启动：没有绑定 D1 数据库（环境变量 DB）` | `wrangler.jsonc` 的 `d1_databases` 段缺失或被注释掉了 |
 | 部署成功但数据「消失」了 | `name` 与 Dashboard 项目名不一致，实际部署到了另一个 Worker |
 | 迁移或供给报权限错误 | 构建用的 API Token 缺 D1 权限。Dashboard → 该 Worker → Settings → Build → API token，给它加上 D1 的编辑权限；或改为在本地手动执行迁移 |
 | R2 自动创建失败 | 账号还没开通 R2。先去 Dashboard 的 R2 页面点一次开通 |
@@ -164,8 +175,8 @@ npx wrangler secret put INVENTORY_ADMIN_PASSWORD
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `INVENTORY_APP_NAME` | `库存管理系统` | 站点名称 |
-| `INVENTORY_VERSION` | `1.0.0` | 当前版本号，系统更新页用它和 Release tag 比较 |
-| `INVENTORY_ENV` | `development` | `production` 时启用 JSON 日志、要求显式会话密钥、默认不写演示数据 |
+| `INVENTORY_VERSION` | `1.0.0` | 版本号。用于 `/healthz` 的返回值，以及静态资源 URL 的内容指纹 |
+| `INVENTORY_ENV` | `development` | `production` 时启用 JSON 日志、默认不写演示数据 |
 | `INVENTORY_BASE_URL` | `http://localhost:8080` | 对外访问地址。**必须改成 https 地址**，否则 Secure cookie 与 HSTS 不生效 |
 | `INVENTORY_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 
@@ -173,7 +184,6 @@ npx wrangler secret put INVENTORY_ADMIN_PASSWORD
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `INVENTORY_SESSION_SECRET` | 开发环境自动生成 | **生产环境必填**，至少 16 字符 |
 | `INVENTORY_SESSION_LIFETIME` | `12h` | 会话有效期 |
 | `INVENTORY_REMEMBER_LIFETIME` | `720h` | 「记住我」有效期，不得短于会话有效期 |
 | `INVENTORY_MAX_LOGIN_ATTEMPTS` | `5` | 同一「账号 + 来源 IP」的失败上限；同一账号跨来源的兜底上限是它的 10 倍 |
@@ -192,17 +202,12 @@ npx wrangler secret put INVENTORY_ADMIN_PASSWORD
 | `INVENTORY_ADMIN_PASSWORD` | `Admin@12345` | 初始化管理员密码。生产环境仍用默认值时会在启动日志里打 warn 告警 |
 | `INVENTORY_SEED_DEMO_DATA` | 随环境（production 为 `false`） | 数据库为空时是否写入内置演示数据 |
 
-### 备份与更新
+### 备份
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `INVENTORY_BACKUP_KEEP` | `14` | 自动命名备份的保留份数，`0` 表示不自动清理 |
 | `INVENTORY_BACKUP_PREFIX` | `backups/` | R2 对象键前缀（替代原版的 `INVENTORY_BACKUP_DIR`） |
-| `INVENTORY_UPDATE_ENABLED` | `true` | 是否启用在线更新 |
-| `INVENTORY_UPDATE_REPO` | 空 | 更新仓库 `owner/repo`；留空则整个功能关闭 |
-| `INVENTORY_UPDATE_INTERVAL` | `6h` | 自动检查间隔 |
-| `INVENTORY_UPDATE_TOKEN` | 空 | 可选，访问私有仓库或规避 GitHub API 限流 |
-| `INVENTORY_UPDATE_DEPLOY_HOOK` | 空 | **Workers 版新增**。填上 Deploy Hook 地址后「立即更新」才能一键触发部署 |
 
 ---
 
@@ -218,6 +223,7 @@ npx wrangler secret put INVENTORY_ADMIN_PASSWORD
 | SQLite 文件（`data/inventory.db`，WAL 模式） | D1（托管 SQLite） |
 | 事务 `BEGIN` / `COMMIT`，`_txlock=immediate` 串行化冷启动 | **没有可交互事务**，改用「把判断写进 SQL 的 WHERE 子句」+ 幂等写入 |
 | 时间存 `DATETIME` | 时间存 ISO-8601 UTC 文本（字典序即时间序），界面按 UTC+8 展示 |
+| `//go:embed schema.sql` + 启动时 `database.Migrate()` | **同样是首次请求自动建表**（见 2.1）。`.sql` 由 wrangler 的 Text 规则打进 bundle，与 `wrangler d1 migrations apply` 读的是同一份文件 |
 
 原版靠 `_txlock=immediate` 把「判空 + 写入」锁在一个事务里；D1 没有这个能力，
 因此所有 check-then-act 都被改写成单条带守卫的语句：
@@ -264,20 +270,36 @@ npx wrangler d1 export inventory --remote --output=backup.sql
 恢复是「先清空再写回」，中途失败会留下不完整的库，因此程序在动手前**强制**先做一份安全备份；
 安全备份失败则中止恢复。
 
-### 4.4 系统更新
+### 4.4 系统更新（已移除）
 
-原版会下载安装包、校验 SHA-256、原子替换可执行文件、重启进程。
-Worker 不能替换自己的代码，因此：
+原版会下载安装包、校验 SHA-256、原子替换可执行文件、重启进程 —— 这些在 Worker 上**本质上做不到**：
+不能替换自己的代码，也没有可写的文件系统。移植时曾用「GitHub Releases API 检查版本 +
+Deploy Hook 触发重新部署」来近似，但实测下来价值不足而维护成本明显：
 
-- **检查更新照旧**：调 GitHub Releases API，语义化版本比较、发布说明截断、错误分类文案都保留；
-  检查结果落在 `settings` 表里（原版存在内存中，而 Worker 的 isolate 随时会被回收）。
-- **「立即更新」改为触发一次重新部署**：配置 `INVENTORY_UPDATE_DEPLOY_HOOK`
-  （Cloudflare Workers Builds 的 Deploy Hook）后，按钮会 POST 该地址；
-  未配置时只给出 `npx wrangler deploy` 的命令指引。
-- **等待页的判据变了**：原版盯着 `/readyz` 能否连通，这里盯着 `/healthz` **报的版本号**。
-  因为部署期间旧版本一直在正常服务，「能连通」会立刻成功、刷新后看到的还是旧版本 ——
-  这正是原版注释里警告过的那个坑。`/healthz?expect=<版本>` 在版本没换过来之前一直返回 503。
-- **回滚**：`npx wrangler versions list` + `npx wrangler rollback <版本号>`。
+- 版本检查只对**源码自建**的部署有意义；从 Dashboard 连 Git 的 Workers Builds 本身就会在
+  推送时自动重新部署，再叠一层「检查更新」是重复的。
+- 「立即更新」依赖一个额外的 `INVENTORY_UPDATE_DEPLOY_HOOK` Secret，等于为了一个按钮
+  多养一份凭据。
+- 版本比较逻辑（`src/lib/semver.ts`）与原版并非逐行等价，属于要长期维护的独立代码面。
+
+因此**整个功能已删除**：`src/routes/update.ts`、`src/views/update.ts`、`src/lib/semver.ts`
+以及全部 `INVENTORY_UPDATE_*` 变量与导航入口都不再存在，`/admin/update` 返回 404。
+
+升级方式改为标准做法：
+
+```bash
+# 本地部署的：重新部署即可（Workers 会做灰度、可回滚）
+npm run deploy:ci
+
+# 连了 Git 的：推送到默认分支，Workers Builds 自动构建部署
+
+# 回滚到上一个版本
+npx wrangler versions list
+npx wrangler rollback <版本号>
+```
+
+`INVENTORY_VERSION` 仍保留，但它现在只做两件事：`/healthz` 的返回值，以及静态资源
+URL 的内容指纹（见 4.5）。
 
 ### 4.5 静态资源与缓存
 
@@ -298,6 +320,7 @@ SHA-256（前 8 位十六进制），拼成 `?v=<指纹>` 加到每个 `/static/
 | --- | --- |
 | `INVENTORY_ADDR` / `INVENTORY_DATA_DIR` / `INVENTORY_DB_PATH` | 由 Workers 与 D1 取代，不再存在 |
 | `INVENTORY_BACKUP_DIR` | 换成 `INVENTORY_BACKUP_PREFIX`（R2 键前缀） |
+| `INVENTORY_UPDATE_*` 与「系统更新」页面 | **整体删除**（含版本检查、Deploy Hook 触发更新、等待生效页）。Worker 无法替换自身代码，且 Workers Builds 推送即部署，这层已无必要。详见 4.4 |
 | `INVENTORY_TRUSTED_PROXIES` | 不再需要。来源 IP 直接读 `CF-Connecting-IP`（Cloudflare 写入，客户端伪造无效） |
 | `--purge-demo-data --purge-legacy-demo` 命令行 | 未提供。站内清理只认 `is_demo` 标记；「SKU 命中但无标记」的旧数据会在页面上列出来，确认后手工执行 SQL 处理 |
 | 每日定时备份的 systemd timer / `/etc/periodic/daily` | 未提供。需要的话在 `wrangler.jsonc` 里加一条 Cron Trigger 调用备份接口 |
@@ -347,15 +370,18 @@ src/
   bootstrap.ts        惰性初始化（首次请求时建管理员 / 写演示数据）
   lib/                工具库：crypto / time / format / validate / csv / flash
                       / pagination / sql / request / form / errors / logger
-                      / semver（版本比较）/ backup（R2 对象层）
+                      / backup（R2 对象层）
   db/                 数据访问层，对应 internal/services + internal/database
                       store.ts 是基类，其余文件用「声明合并 + 原型挂载」扩展它
+                      schema.ts 空库自动建表（对应 //go:embed schema.sql + Migrate）
                       ⚠️ 新增领域文件后必须在 db/index.ts 里 import 一次
   auth/session.ts     会话与 CSRF（对应 internal/auth）
   middleware/         中间件链（对应 internal/middleware）
   views/              服务端渲染视图（对应 web/templates）
   routes/             路由与处理器（对应 internal/handlers）
+  sql.d.ts            让 TS 接受 `import sql from "./x.sql"`（由 wrangler 的 Text 规则实现）
 migrations/           D1 表结构（对应 internal/database/schema.sql）
+                      0001_init.sql 同时被「wrangler 迁移」与「运行时自愈」使用
 public/               静态资源（对应 web/static），_headers 写缓存策略
 docs/CONVENTIONS.md   移植规范（视图层规则、命名约定、交付要求）
 ```
