@@ -107,10 +107,43 @@ npx wrangler secret put INVENTORY_ADMIN_PASSWORD   # 强密码
 
 > **登录后第一件事：改掉默认管理员密码。** 默认账号 `admin` / `Admin@12345`。
 
-### 2.4 部署排错
+### 2.4 必须设置的两个密钥（漏了会启动即 500）
+
+| 密钥 | 生产环境要求 | 漏掉的后果 |
+| --- | --- | --- |
+| `INVENTORY_SESSION_SECRET` | **必填**，≥16 字符（建议 32+） | Worker 每次请求都返回 500「服务配置错误，无法启动：生产环境必须设置 INVENTORY_SESSION_SECRET」 |
+| `INVENTORY_ADMIN_PASSWORD` | 强烈建议设置 | 能启动，但管理员密码是内置的 `Admin@12345`；生产环境会打 warn 日志 |
+
+```bash
+# 生成一个强随机串（64 个十六进制字符）
+openssl rand -hex 32
+
+# 写入（需要先 npx wrangler login）
+npx wrangler secret put INVENTORY_SESSION_SECRET
+npx wrangler secret put INVENTORY_ADMIN_PASSWORD
+```
+
+用 Workers Builds 部署、本机没登录 wrangler 的，可以直接在
+**Dashboard → 该 Worker → Settings → Variables and Secrets → Add**，
+类型选 **Secret**（不是 Text），名字照上表填。**设置后立即生效，不需要重新部署。**
+
+三个容易踩的点：
+
+1. **不要写进 `wrangler.jsonc` 的 `vars`。** `vars` 会提交进仓库、在 Dashboard 里也是明文；
+   只有 Secret 是加密存储的。
+2. **密钥按 Worker 隔离。** 必须设在 `name` 对应的那个 Worker 上 —— 如果名字不一致，
+   你会给一个 Worker 配好密钥、却在访问另一个。
+3. **开发环境不会遇到这个错。** `INVENTORY_ENV` 不是 `production` 时，会话密钥会自动生成
+   （所以本地 `.dev.vars` 能直接跑）。只有部署到生产才会触发这道守卫 —— 这是刻意设计的
+   fail-fast：密钥缺失时签名/校验会话的能力是坏的，与其带病运行不如直接拒绝启动。
+
+### 2.5 部署排错
 
 | 报错 | 原因与处理 |
 | --- | --- |
+| `服务配置错误，无法启动：生产环境必须设置 INVENTORY_SESSION_SECRET…` | 生产环境没设会话密钥。见 2.4，用 `wrangler secret put` 或 Dashboard 写入 |
+| `服务配置错误，无法启动：INVENTORY_SESSION_SECRET 太短…` | 密钥不足 16 字符。用 `openssl rand -hex 32` 重新生成 |
+| 日志出现「生产环境仍在使用内置的默认管理员密码」 | 没设 `INVENTORY_ADMIN_PASSWORD`，管理员是 `Admin@12345`。立刻设置并重新部署 |
 | `binding DB of type d1 must have a valid database_id specified [code: 10021]` | 配置里 `database_id` 是占位字符串。删掉该字段（走自动供给）或填真实 UUID |
 | `DB bindings must have a "database_id" field` | 只在 `--dry-run` 下出现，属**正常现象**：dry-run 不联网、无法创建资源，所以回填不了 ID。真实部署（`wrangler deploy`）不受影响 |
 | `d1_databases[0] bindings must have a "database_id" field but got {...}` | wrangler 3.x 的配置校验要求该字段存在。升级到 `wrangler@4`，或在 deploy 命令后加 `--experimental-provision` |
@@ -156,7 +189,7 @@ npx wrangler secret put INVENTORY_ADMIN_PASSWORD   # 强密码
 | `INVENTORY_DEFAULT_ROLE` | `viewer` | 自助注册者的默认角色（`viewer` / `manager`）。**填 `admin` 会让服务拒绝启动** |
 | `INVENTORY_ADMIN_USERNAME` | `admin` | 初始化管理员用户名 |
 | `INVENTORY_ADMIN_EMAIL` | `admin@example.com` | 初始化管理员邮箱 |
-| `INVENTORY_ADMIN_PASSWORD` | `Admin@12345` | 初始化管理员密码 |
+| `INVENTORY_ADMIN_PASSWORD` | `Admin@12345` | 初始化管理员密码。生产环境仍用默认值时会在启动日志里打 warn 告警 |
 | `INVENTORY_SEED_DEMO_DATA` | 随环境（production 为 `false`） | 数据库为空时是否写入内置演示数据 |
 
 ### 备份与更新

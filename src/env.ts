@@ -192,6 +192,13 @@ function duration(env: Env, key: keyof Env, fallbackMs: number): number {
 const DEFAULT_BACKUP_KEEP = 14;
 
 /**
+ * 内置的默认管理员密码。抽成常量是因为有两处要用它：
+ * 这里作为 `INVENTORY_ADMIN_PASSWORD` 的兜底值，以及 bootstrap 里判断
+ * 「是否仍在用默认密码」以打印告警（对应原版 main.go 的启动提示）。
+ */
+export const DEFAULT_ADMIN_PASSWORD = "Admin@12345";
+
+/**
  * 从绑定中读取配置并做合法性校验。
  *
  * 对显式设置但无法解析的取值直接报错而不是静默回落默认值：静默回落会让运维
@@ -261,7 +268,8 @@ export function loadConfig(env: Env): Config {
     throw new ConfigError("INVENTORY_SESSION_SECRET 太短，请使用至少 16 个字符的随机字符串");
   }
 
-  const seedAdminPassword = str(env, "INVENTORY_ADMIN_PASSWORD", "") || "Admin@12345";
+  const seedAdminPassword =
+    str(env, "INVENTORY_ADMIN_PASSWORD", "") || DEFAULT_ADMIN_PASSWORD;
 
   // 演示数据默认跟随环境：生产环境不写入，开发 / 测试环境写入便于试用。
   // 与原版一致 —— 「没配置」和「配了 false」是两回事，但这里的默认值
