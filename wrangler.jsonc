@@ -1,5 +1,9 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
+  // ⚠️ 这个名字必须与 Workers Builds 的项目名完全一致。
+  //    wrangler 只认这里写的名字，Cloudflare 不会用项目名覆盖它；
+  //    两者不一致时会**再建一个 Worker**，于是你打开的是新 Worker 的空库，
+  //    而数据还在原来那个里 —— 症状是「部署成功了，但数据全没了」。
   "name": "inventory",
   "main": "src/index.ts",
   "compatibility_date": "2025-01-01",
@@ -15,19 +19,30 @@
   },
 
   // ── D1 数据库 ───────────────────────────────────────────────────────────
-  // 先执行 `npm run db:create`，把返回的 database_id 填到下面。
+  // 这里**故意不写 database_id**，走 Cloudflare 的「自动供给」
+  // （automatic provisioning）：部署时 wrangler 先按 database_name 查找，
+  // 找不到就用这个名字自动创建并绑定。这样 Git 连接的 Workers Builds
+  // 也能一键部署，不必先把 ID 复制进仓库。
+  //
+  // ⚠️ 千万不要写占位字符串（例如 "REPLACE_WITH_YOUR_D1_DATABASE_ID"）：
+  //    wrangler 会把它当成一个**真实 ID** 发给 API 校验，直接报
+  //    binding DB of type d1 must have a valid `database_id` specified
+  //    [code: 10021] —— 因为「有值」就代表「已完全指定」，不会再走自动创建。
+  //
+  // 想手动指定也可以：先在 Dashboard 建同名库（或 `wrangler d1 create inventory`），
+  // 再把返回的 UUID 写成 "database_id": "<UUID>"。两种写法都行，但不要留占位符。
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "inventory",
-      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID",
       "migrations_dir": "migrations"
     }
   ],
 
   // ── R2 备份桶 ───────────────────────────────────────────────────────────
   // 「数据维护」页的备份 / 恢复 / 轮转依赖这个桶。
-  // 部署前先执行： npx wrangler r2 bucket create inventory-backups
+  // 同样支持自动供给：bucket_name 指向的桶不存在时会自动创建（首次部署前
+  // 请先在 Dashboard 的 R2 页面点一次开通条款，否则账号还没启用 R2，创建会失败）。
   // 完全不需要备份功能时，把下面整段注释掉即可 —— 页面会降级成
   // 「未绑定 R2 备份桶」的提示，其余功能不受影响。
   "r2_buckets": [
