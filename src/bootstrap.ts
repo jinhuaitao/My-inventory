@@ -4,11 +4,15 @@
 // **首次请求时惰性初始化**，并用模块级 Promise 保证同一个 isolate 内只跑一次。
 //
 // 与原版一致的语义：
+//   * 先确保表结构存在（对应原版启动时的 database.Migrate，见 db/schema.ts）；
 //   * 只有在 users 表为空时才创建默认管理员；
 //   * 只有在 products 表为空、且开启了 INVENTORY_SEED_DEMO_DATA 时才写演示数据；
 //   * 两个判断都由数据库侧的守卫保证并发安全（见 db/seed.ts）。
 
 import type { Store } from "./db";
+// 直接从 schema 模块引入（而不是 db 的桶文件），避免任何潜在的循环依赖 ——
+// 它只依赖 logger 的类型和打包进来的 .sql 文本。
+import { ensureSchema } from "./db/schema";
 import { DEFAULT_ADMIN_PASSWORD } from "./env";
 import type { Config } from "./env";
 import type { Logger } from "./lib/logger";
@@ -29,6 +33,11 @@ export function ensureSeeded(store: Store, cfg: Config, logger: Logger): Promise
 }
 
 async function runSeed(store: Store, cfg: Config, logger: Logger): Promise<void> {
+  // 先保证表结构存在 —— 对应原版 main.go 启动时调用的 database.Migrate。
+  // 空库（典型场景：部署流程漏跑了迁移）会自动建表，而不是让整个站点 500。
+  // 已有结构时这一步只是一次 `SELECT 1 FROM users LIMIT 1`。
+  await ensureSchema(store.db, logger);
+
   await store.seed({
     adminUsername: cfg.seedAdminUsername,
     adminEmail: cfg.seedAdminEmail,

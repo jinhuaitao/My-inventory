@@ -10,6 +10,15 @@
   // bcryptjs（用于校验从原 Go 版迁移过来的 bcrypt 历史密码摘要）需要 node:crypto
   "compatibility_flags": ["nodejs_compat"],
 
+  // ── 把 .sql 当文本打进 bundle ──────────────────────────────────────────
+  // 首次请求发现数据库是空的时候，Worker 会用 migrations/0001_init.sql
+  // 自动建表（对应原版启动时执行的 database.Migrate，原版把 schema.sql
+  // 用 //go:embed 嵌进了二进制）。
+  //
+  // 这样做是为了**只有一份结构定义**：wrangler d1 migrations apply 和
+  // 运行时的自愈读的是同一个文件，不会出现两边不一致。
+  "rules": [{ "type": "Text", "globs": ["**/*.sql"] }],
+
   // ── 静态资源 ────────────────────────────────────────────────────────────
   // public/static/** 由 Workers 静态资源直接下发，命中文件时不会进入 Worker。
   // 缓存策略写在 public/_headers 里（URL 带内容指纹，可长期缓存）。

@@ -46,6 +46,18 @@ export const provide = createMiddleware<AppEnv>(async (c, next) => {
   }
 
   const logger = newLogger(cfg);
+
+  // D1 未绑定是最容易犯的配置错误（例如 wrangler.jsonc 的 d1_databases 段
+  // 被注释掉了）。单独判一次，否则后面会抛出难以定位的 TypeError。
+  if (!c.env.DB) {
+    logger.error("D1 绑定缺失", { 绑定: "DB" });
+    return c.text(
+      "服务配置错误，无法启动：没有绑定 D1 数据库（环境变量 DB）。\n" +
+        "请检查 wrangler.jsonc 的 d1_databases 段，然后重新部署。",
+      500,
+    );
+  }
+
   const store = new Store(c.env.DB, logger);
   c.set("cfg", cfg);
   c.set("logger", logger);
@@ -56,14 +68,37 @@ export const provide = createMiddleware<AppEnv>(async (c, next) => {
   try {
     await ensureSeeded(store, cfg, logger);
   } catch (err) {
-    logger.error("数据库初始化失败", {
-      错误: err instanceof Error ? err.message : String(err),
-    });
-    return c.text("数据库初始化失败，请检查 D1 绑定与迁移是否已执行", 500);
+    const detail = err instanceof Error ? err.message : String(err);
+    logger.error("数据库初始化失败", { 错误: detail });
+    return c.text(initFailureMessage(detail), 500);
   }
 
   await next();
 });
+
+/**
+ * 初始化失败时给运维看的提示。
+ *
+ * 「表不存在」是部署阶段最常见的失败：D1 绑定配好了、库也建出来了，但迁移
+ * 没跑（默认的 `wrangler deploy` **不含**迁移），于是库里一张表都没有。
+ * 这种情况必须把「具体怎么办」直接写在响应里 —— 否则页面上只有一句笼统的
+ * 「请检查 D1 绑定与迁移」，真正的原因（`no such table: users`）只躺在日志里，
+ * 排查要绕一大圈。
+ *
+ * 其余错误仍然保持笼统：连接失败、权限不足之类的异常信息可能带出内部细节，
+ * 不值得直接暴露给访问者。
+ */
+function initFailureMessage(detail: string): string {
+  if (/no such table/i.test(detail)) {
+    return (
+      "数据库尚未初始化：D1 里没有任何表，说明迁移没有执行。\n\n" +
+      "在项目目录执行一次迁移即可：\n" +
+      "  npx wrangler d1 migrations apply inventory --remote\n\n" +
+      "想让每次部署都自动跑迁移，把 Workers Builds 的 Deploy command 改成 `npm run deploy:ci`。"
+    );
+  }
+  return "数据库初始化失败，请检查 D1 绑定与迁移是否已执行";
+}
 
 /** 捕获未处理的异常，记录日志并返回 500。 */
 export const recoverer = createMiddleware<AppEnv>(async (c, next) => {

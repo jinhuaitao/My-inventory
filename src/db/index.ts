@@ -16,6 +16,7 @@
 //   stats.ts      ← services/stats.go
 //   seed.ts       ← database/database.go  （Seed / seedDemoData / PurgeDemoData）
 //   backup.ts     ← database/database.go  （备份与迁移一节）
+//   schema.ts     ← database/database.go  （//go:embed schema.sql + Migrate）
 
 export * from "./store";
 
@@ -29,3 +30,4 @@ export * from "./movements";
 export * from "./stats";
 export * from "./seed";
 export * from "./backup";
+export * from "./schema";
