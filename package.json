@@ -13,16 +13,20 @@
     "db:migrate:local": "wrangler d1 migrations apply inventory --local",
     "db:migrate:remote": "wrangler d1 migrations apply inventory --remote",
     "db:create": "wrangler d1 create inventory",
-    "tail": "wrangler tail"
+    "tail": "wrangler tail",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "hono": "^4.6.14"
   },
   "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.4.0",
     "@cloudflare/workers-types": "^5",
     "@types/bcryptjs": "^2.4.6",
     "typescript": "^5.7.2",
+    "vitest": "^4.1.0",
     "wrangler": "^4"
   }
 }
